@@ -1,0 +1,144 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - '[0-9]*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Plugin version, e.g. 0.1.0'
+        required: true
+        default: '0.1.0'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building version: $VERSION"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build Vue plugin
+        working-directory: page
+        env:
+          PLUGIN_VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          npm install
+          npm run build
+
+      - name: Fetch Yazi release
+        id: yazi
+        run: |
+          REL=$(curl -fsSL https://api.github.com/repos/sxyazi/yazi/releases/latest)
+          TAG=$(printf '%s' "$REL" | jq -r '.tag_name')
+          echo "TAG=$TAG" >> "$GITHUB_OUTPUT"
+          echo "VERSION=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build both architecture packages
+        run: |
+          VERSION='${{ steps.version.outputs.VERSION }}'
+          YAZI_VERSION='${{ steps.yazi.outputs.VERSION }}'
+          REL=$(curl -fsSL https://api.github.com/repos/sxyazi/yazi/releases/latest)
+
+          for pair in "amd64 x86_64" "arm64 aarch64"; do
+            set -- $pair
+            DEB_ARCH="$1"
+            YAZI_ARCH="$2"
+            PKG_NAME="yazi-${VERSION}-1+mos-plugin_${DEB_ARCH}"
+            PKG_DIR="${PKG_NAME}"
+            ASSET="yazi-${YAZI_ARCH}-unknown-linux-gnu.zip"
+
+            URL=$(printf '%s' "$REL" | jq -r --arg n "$ASSET" '.assets[] | select(.name == $n) | .browser_download_url' | head -n1)
+            DIGEST=$(printf '%s' "$REL" | jq -r --arg n "$ASSET" '.assets[] | select(.name == $n) | .digest // empty' | head -n1)
+            [ -n "$URL" ] || { echo "no $ASSET" >&2; exit 1; }
+
+            mkdir -p "${PKG_DIR}/DEBIAN" "${PKG_DIR}/usr/bin/plugins" "${PKG_DIR}/usr/lib/yazi" "${PKG_DIR}/usr/share/yazi-plugin" "${PKG_DIR}/usr/share/bash-completion/completions" "${PKG_DIR}/usr/share/zsh/vendor-completions" "${PKG_DIR}/usr/share/fish/vendor_completions.d" "${PKG_DIR}/var/www/mos-plugins/yazi"
+            curl -fsSL "$URL" -o /tmp/yazi.zip
+            if [ -n "$DIGEST" ]; then
+              case "$DIGEST" in sha256:*) DIGEST="${DIGEST#sha256:}" ;; esac
+              printf '%s  %s\n' "$DIGEST" /tmp/yazi.zip | sha256sum -c - >/dev/null
+            fi
+            rm -rf /tmp/yazi-extract
+            mkdir -p /tmp/yazi-extract
+            unzip -q /tmp/yazi.zip -d /tmp/yazi-extract
+            SRC="/tmp/yazi-extract/yazi-${YAZI_ARCH}-unknown-linux-gnu"
+            [ -x "$SRC/yazi" ] || { echo "archive does not contain yazi" >&2; exit 1; }
+            [ -x "$SRC/ya" ] || { echo "archive does not contain ya" >&2; exit 1; }
+
+            install -m 0755 "$SRC/yazi" "${PKG_DIR}/usr/lib/yazi/yazi"
+            install -m 0755 "$SRC/ya" "${PKG_DIR}/usr/lib/yazi/ya"
+            install -m 0644 "$SRC/completions/yazi.bash" "${PKG_DIR}/usr/share/bash-completion/completions/yazi"
+            install -m 0644 "$SRC/completions/ya.bash" "${PKG_DIR}/usr/share/bash-completion/completions/ya"
+            install -m 0644 "$SRC/completions/_yazi" "${PKG_DIR}/usr/share/zsh/vendor-completions/_yazi"
+            install -m 0644 "$SRC/completions/_ya" "${PKG_DIR}/usr/share/zsh/vendor-completions/_ya"
+            install -m 0644 "$SRC/completions/yazi.fish" "${PKG_DIR}/usr/share/fish/vendor_completions.d/yazi.fish"
+            install -m 0644 "$SRC/completions/ya.fish" "${PKG_DIR}/usr/share/fish/vendor_completions.d/ya.fish"
+
+            cp yazi-backend "${PKG_DIR}/usr/bin/plugins/yazi"
+            chmod 0755 "${PKG_DIR}/usr/bin/plugins/yazi"
+            cp yazi-wrapper "${PKG_DIR}/usr/bin/yazi"
+            chmod 0755 "${PKG_DIR}/usr/bin/yazi"
+            cp ya-wrapper "${PKG_DIR}/usr/bin/ya"
+            chmod 0755 "${PKG_DIR}/usr/bin/ya"
+            cp yazi-backend yazi-wrapper ya-wrapper functions settings.json packages "${PKG_DIR}/usr/share/yazi-plugin/"
+            chmod 0755 "${PKG_DIR}/usr/share/yazi-plugin/yazi-backend" "${PKG_DIR}/usr/share/yazi-plugin/yazi-wrapper" "${PKG_DIR}/usr/share/yazi-plugin/ya-wrapper" "${PKG_DIR}/usr/share/yazi-plugin/functions"
+            cp -R page/dist/yazi/. "${PKG_DIR}/var/www/mos-plugins/yazi/"
+            cp images/yazi.png "${PKG_DIR}/var/www/mos-plugins/yazi/icon.png"
+
+            cat > "${PKG_DIR}/DEBIAN/control" << EOF
+          Package: yazi-plugin
+          Version: ${VERSION}-1+mos-plugin
+          Architecture: ${DEB_ARCH}
+          Maintainer: hustyanzu
+          Section: utils
+          Priority: optional
+          Description: Yazi plugin for MOS
+           Blazing fast terminal file manager with previews.
+          EOF
+
+            cp debian/postinst "${PKG_DIR}/DEBIAN/postinst"
+            chmod 0755 "${PKG_DIR}/DEBIAN/postinst"
+            cp debian/postrm "${PKG_DIR}/DEBIAN/postrm"
+            chmod 0755 "${PKG_DIR}/DEBIAN/postrm"
+
+            dpkg-deb --build --root-owner-group "${PKG_DIR}" "${PKG_DIR}.deb"
+            md5sum "${PKG_DIR}.deb" | awk '{print $1}' > "${PKG_DIR}.deb.md5"
+            rm -rf /tmp/yazi-extract /tmp/yazi.zip
+          done
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.VERSION }}
+          name: Yazi ${{ steps.version.outputs.VERSION }}
+          body: |
+            ## Yazi MOS plugin ${{ steps.version.outputs.VERSION }}
+
+            The Yazi ${{ steps.yazi.outputs.VERSION }} binaries are embedded in the architecture-specific .deb.
+            Install the plugin from the MOS Hub; dependencies are managed from the plugin page.
+          files: |
+            yazi-${{ steps.version.outputs.VERSION }}-1+mos-plugin_amd64.deb
+            yazi-${{ steps.version.outputs.VERSION }}-1+mos-plugin_amd64.deb.md5
+            yazi-${{ steps.version.outputs.VERSION }}-1+mos-plugin_arm64.deb
+            yazi-${{ steps.version.outputs.VERSION }}-1+mos-plugin_arm64.deb.md5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,10 @@
+#!/bin/bash
+case "${1:-}" in
+  remove|purge)
+    rm -rf /usr/lib/yazi
+    if [ -L /usr/bin/fd ] && [ "$(readlink /usr/bin/fd)" = "fdfind" ]; then
+      rm -f /usr/bin/fd
+    fi
+    ;;
+esac
+exit 0

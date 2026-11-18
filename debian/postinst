@@ -1,0 +1,25 @@
+#!/bin/bash
+set -e
+PLG=/boot/optional/plugins/yazi
+SHARE=/usr/share/yazi-plugin
+
+mkdir -p "$PLG/config" "$PLG/data" "$PLG/packages"
+
+for f in yazi-backend yazi-wrapper ya-wrapper functions; do
+  cp -f "$SHARE/$f" "$PLG/$f"
+done
+chmod 0755 "$PLG/yazi-backend" "$PLG/yazi-wrapper" "$PLG/ya-wrapper" "$PLG/functions" 2>/dev/null || true
+
+if [ ! -f "$PLG/settings.json" ]; then
+  cp -f "$SHARE/settings.json" "$PLG/settings.json"
+fi
+
+if [ ! -f "$PLG/packages/packages" ] && [ -f "$SHARE/packages" ]; then
+  cp -f "$SHARE/packages" "$PLG/packages/packages"
+fi
+
+if [ ! -e /usr/bin/fd ] && command -v fdfind >/dev/null 2>&1; then
+  ln -sf fdfind /usr/bin/fd
+fi
+
+exit 0

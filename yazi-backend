@@ -1,0 +1,221 @@
+#!/bin/bash
+# Yazi backend for MOS.
+# The Yazi binaries are installed by the plugin .deb under /usr/lib/yazi.
+# Dependencies are installed in the background because MOS plugin queries
+# have a 60 second limit.
+
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+umask 022
+
+PLG_DIR="${YAZI_PLUGIN_DIR:-/boot/optional/plugins/yazi}"
+BIN="${YAZI_BIN:-/usr/lib/yazi/yazi}"
+SHARE_DIR="${YAZI_SHARE_DIR:-/usr/share/yazi-plugin}"
+CONFIG_DIR="$PLG_DIR/config"
+DATA_DIR="$PLG_DIR/data"
+PKG_DIR="$PLG_DIR/packages"
+SETTINGS="$PLG_DIR/settings.json"
+PID_FILE="$PKG_DIR/.installing"
+FAILED_FILE="$PKG_DIR/.failed"
+LOG_FILE="$PKG_DIR/install.log"
+
+DEPS="file ripgrep fd-find fzf zoxide jq ffmpeg poppler-utils p7zip-full resvg imagemagick git udisks2 zip unzip"
+
+say() { echo "$*"; }
+has_cmd() { command -v "$1" >/dev/null 2>&1; }
+cmd_bool() { if has_cmd "$1"; then echo true; else echo false; fi; }
+
+ensure_dirs() {
+  mkdir -p "$CONFIG_DIR" "$DATA_DIR" "$PKG_DIR" 2>/dev/null || true
+  if [ ! -f "$SETTINGS" ]; then
+    if [ -f "$SHARE_DIR/settings.json" ]; then
+      cp -f "$SHARE_DIR/settings.json" "$SETTINGS" 2>/dev/null || true
+    else
+      printf '{}\n' > "$SETTINGS" 2>/dev/null || true
+    fi
+  fi
+}
+
+current_version() {
+  if [ -x "$BIN" ]; then
+    "$BIN" --version 2>/dev/null | awk '/Version:/{print $2; exit}'
+  fi
+}
+
+missing_deps() {
+  has_cmd file || echo file
+  has_cmd rg || echo rg
+  has_cmd fd || echo fd
+  has_cmd fzf || echo fzf
+  has_cmd zoxide || echo zoxide
+  has_cmd jq || echo jq
+  has_cmd ffmpeg || echo ffmpeg
+  has_cmd pdftoppm || echo pdftoppm
+  has_cmd 7z || echo 7z
+  has_cmd magick || echo magick
+  has_cmd resvg || echo resvg
+  has_cmd git || echo git
+  has_cmd udisksctl || echo udisksctl
+  has_cmd zip || echo zip
+  has_cmd unzip || echo unzip
+}
+
+current_boot_id() {
+  cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo unknown
+}
+
+worker_running() {
+  [ -f "$PID_FILE" ] || return 1
+  local boot pid
+  read -r boot pid < "$PID_FILE" 2>/dev/null || true
+  if [ -n "$pid" ] && [ "$boot" = "$(current_boot_id)" ] && kill -0 "$pid" 2>/dev/null; then
+    return 0
+  fi
+  rm -f "$PID_FILE" 2>/dev/null || true
+  return 1
+}
+
+cmd_status() {
+  ensure_dirs
+
+  local installed=false version config_exists=false installing=false failed=false
+  local missing_json="" dep first=true
+
+  [ -x "$BIN" ] && installed=true
+  version="$(current_version)"
+  [ -n "$version" ] || version="not installed"
+
+  for f in yazi.toml keymap.toml theme.toml init.lua; do
+    if [ -f "$CONFIG_DIR/$f" ]; then
+      config_exists=true
+      break
+    fi
+  done
+
+  if worker_running; then
+    installing=true
+  fi
+  [ -f "$FAILED_FILE" ] && failed=true
+
+  local -a missing=()
+  while IFS= read -r dep; do
+    [ -n "$dep" ] && missing+=("$dep")
+  done < <(missing_deps)
+
+  for dep in "${missing[@]}"; do
+    if [ "$first" = true ]; then
+      first=false
+    else
+      missing_json+=","
+    fi
+    missing_json+="\"$dep\""
+  done
+
+  printf '{"installed":%s,"version":"%s","config":"%s","config_exists":%s,"command":"yazi","deps":{"file":%s,"rg":%s,"fd":%s,"fzf":%s,"zoxide":%s,"jq":%s,"ffmpeg":%s,"pdftoppm":%s,"7z":%s,"magick":%s,"resvg":%s,"git":%s,"udisksctl":%s,"zip":%s,"unzip":%s},"missing_deps":[%s],"deps_installing":%s,"deps_failed":%s,"deps_log":"%s"}\n' \
+    "$installed" "$version" "$CONFIG_DIR" "$config_exists" \
+    "$(cmd_bool file)" "$(cmd_bool rg)" "$(cmd_bool fd)" "$(cmd_bool fzf)" \
+    "$(cmd_bool zoxide)" "$(cmd_bool jq)" "$(cmd_bool ffmpeg)" "$(cmd_bool pdftoppm)" \
+    "$(cmd_bool 7z)" "$(cmd_bool magick)" "$(cmd_bool resvg)" "$(cmd_bool git)" \
+    "$(cmd_bool udisksctl)" "$(cmd_bool zip)" "$(cmd_bool unzip)" \
+    "$missing_json" "$installing" "$failed" "$LOG_FILE"
+}
+
+cmd_install_deps() {
+  ensure_dirs
+  printf '%s\n' $DEPS > "$PKG_DIR/packages"
+
+  local missing
+  missing="$(missing_deps | tr '\n' ' ')"
+  if [ -z "$missing" ]; then
+    rm -f "$FAILED_FILE" 2>/dev/null || true
+    say "All basic dependencies are already installed"
+    return 0
+  fi
+
+  if worker_running; then
+    say "Dependency installation is already running"
+    return 0
+  fi
+
+  rm -f "$FAILED_FILE" 2>/dev/null || true
+  if command -v setsid >/dev/null 2>&1; then
+    setsid /bin/bash "$0" __install_deps_worker >/dev/null 2>&1 < /dev/null &
+  else
+    nohup /bin/bash "$0" __install_deps_worker >/dev/null 2>&1 < /dev/null &
+  fi
+  sleep 0.2
+  say "Dependency installation started in the background"
+}
+
+cmd_install_deps_worker() {
+  echo "$(current_boot_id) $$" > "$PID_FILE"
+  exec >>"$LOG_FILE" 2>&1
+  echo "=== Yazi dependencies: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+  local apt=apt-get
+  if command -v apt-get.orig >/dev/null 2>&1; then
+    apt=apt-get.orig
+  fi
+
+  local rc=0
+  rm -f "$PKG_DIR"/*.deb 2>/dev/null || true
+
+  DEBIAN_FRONTEND=noninteractive "$apt" update || rc=1
+  if [ "$rc" -eq 0 ]; then
+    DEBIAN_FRONTEND=noninteractive "$apt" install -y --download-only --no-install-recommends \
+      -o Dir::Cache::archives="$PKG_DIR" $DEPS || rc=1
+  fi
+
+  local -a debs=()
+  local f
+  for f in "$PKG_DIR"/*.deb; do
+    [ -f "$f" ] && debs+=("$f")
+  done
+  if [ ${#debs[@]} -gt 0 ]; then
+    dpkg -i "${debs[@]}" || rc=1
+  fi
+
+  dpkg --configure -a >/dev/null 2>&1 || true
+  ldconfig 2>/dev/null || true
+
+  if ! has_cmd fd && has_cmd fdfind; then
+    ln -sf fdfind /usr/bin/fd 2>/dev/null || true
+  fi
+
+  local missing
+  missing="$(missing_deps | tr '\n' ' ')"
+  rm -f "$PID_FILE" 2>/dev/null || true
+
+  if [ -z "$missing" ]; then
+    rm -f "$FAILED_FILE" 2>/dev/null || true
+    echo "Success: all basic dependencies are installed"
+    echo "=== finished"
+    exit 0
+  fi
+
+  printf 'Missing: %s\n' "$missing" > "$FAILED_FILE"
+  echo "Failure: still missing: $missing"
+  echo "=== finished"
+  exit 1
+}
+
+cmd_uninstall() {
+  rm -f /usr/bin/yazi /usr/bin/ya 2>/dev/null || true
+  if [ -L /usr/bin/fd ] && [ "$(readlink /usr/bin/fd)" = "fdfind" ]; then
+    rm -f /usr/bin/fd 2>/dev/null || true
+  fi
+  say "Removed Yazi commands. Config and data kept in $PLG_DIR"
+}
+
+ensure_dirs
+
+case "${1:-}" in
+  status) cmd_status ;;
+  install_deps) cmd_install_deps ;;
+  __install_deps_worker) cmd_install_deps_worker ;;
+  version) current_version ;;
+  uninstall) cmd_uninstall ;;
+  *)
+    echo "Usage: $0 {status|install_deps|version|uninstall}" >&2
+    exit 2
+    ;;
+esac

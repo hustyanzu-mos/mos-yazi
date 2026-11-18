@@ -1,0 +1,75 @@
+#!/bin/bash
+# MOS lifecycle hooks for the Yazi plugin.
+# Yazi itself is installed by the plugin .deb at /usr/lib/yazi.
+
+PLG_DIR="/boot/optional/plugins/yazi"
+HB="/usr/bin/plugins/yazi"
+SHARE_DIR="/usr/share/yazi-plugin"
+
+_restore() {
+  mkdir -p "$PLG_DIR/config" "$PLG_DIR/data" "$PLG_DIR/packages"
+
+  for f in yazi-backend yazi-wrapper ya-wrapper functions; do
+    if [ ! -f "$PLG_DIR/$f" ] && [ -f "$SHARE_DIR/$f" ]; then
+      cp -f "$SHARE_DIR/$f" "$PLG_DIR/$f"
+    fi
+  done
+
+  if [ ! -f "$PLG_DIR/settings.json" ] && [ -f "$SHARE_DIR/settings.json" ]; then
+    cp -f "$SHARE_DIR/settings.json" "$PLG_DIR/settings.json"
+  fi
+
+  if [ ! -f "$PLG_DIR/packages/packages" ] && [ -f "$SHARE_DIR/packages" ]; then
+    cp -f "$SHARE_DIR/packages" "$PLG_DIR/packages/packages"
+  fi
+
+  if [ ! -x /usr/bin/plugins/yazi ]; then
+    mkdir -p /usr/bin/plugins
+    if [ -f "$PLG_DIR/yazi-backend" ]; then
+      cp -f "$PLG_DIR/yazi-backend" /usr/bin/plugins/yazi
+      chmod 0755 /usr/bin/plugins/yazi 2>/dev/null || true
+    fi
+  fi
+
+  if [ ! -x /usr/bin/yazi ] && [ -f "$PLG_DIR/yazi-wrapper" ]; then
+    cp -f "$PLG_DIR/yazi-wrapper" /usr/bin/yazi
+    chmod 0755 /usr/bin/yazi 2>/dev/null || true
+  fi
+
+  if [ ! -x /usr/bin/ya ] && [ -f "$PLG_DIR/ya-wrapper" ]; then
+    cp -f "$PLG_DIR/ya-wrapper" /usr/bin/ya
+    chmod 0755 /usr/bin/ya 2>/dev/null || true
+  fi
+
+  if [ ! -e /usr/bin/fd ] && command -v fdfind >/dev/null 2>&1; then
+    ln -sf fdfind /usr/bin/fd 2>/dev/null || true
+  fi
+}
+
+install() {
+  _restore
+  return 0
+}
+
+uninstall() {
+  if [ -x "$HB" ]; then
+    "$HB" uninstall >/dev/null 2>&1 || true
+  else
+    rm -f /usr/bin/plugins/yazi /usr/bin/yazi /usr/bin/ya 2>/dev/null || true
+    if [ -L /usr/bin/fd ] && [ "$(readlink /usr/bin/fd)" = "fdfind" ]; then
+      rm -f /usr/bin/fd 2>/dev/null || true
+    fi
+  fi
+}
+
+plugin_update() {
+  _restore
+}
+
+mos_start() {
+  _restore
+}
+
+mos_osupdate() {
+  _restore
+}
