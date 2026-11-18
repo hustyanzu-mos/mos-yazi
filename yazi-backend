@@ -1,22 +1,20 @@
 #!/bin/bash
 # Yazi backend for MOS.
 # The Yazi binaries are installed by the plugin .deb under /usr/lib/yazi.
+# Config and data live on a mounted pool; state and cache live in RAM.
 # Dependencies are installed in the background because MOS plugin queries
 # have a 60 second limit.
 
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 umask 022
 
-PLG_DIR="${YAZI_PLUGIN_DIR:-/boot/optional/plugins/yazi}"
-BIN="${YAZI_BIN:-/usr/lib/yazi/yazi}"
-SHARE_DIR="${YAZI_SHARE_DIR:-/usr/share/yazi-plugin}"
-CONFIG_DIR="$PLG_DIR/config"
-DATA_DIR="$PLG_DIR/data"
-PKG_DIR="$PLG_DIR/packages"
-SETTINGS="$PLG_DIR/settings.json"
+. "${YAZI_ENV:-/usr/share/yazi-plugin/yazi-env}"
+
+PKG_DIR="$YAZI_PLUGIN_DIR/packages"
 PID_FILE="$PKG_DIR/.installing"
 FAILED_FILE="$PKG_DIR/.failed"
 LOG_FILE="$PKG_DIR/install.log"
+SHARE_DIR="$YAZI_SHARE_DIR"
 
 DEPS="file ripgrep fd-find fzf zoxide jq ffmpeg poppler-utils p7zip-full resvg imagemagick git udisks2 zip unzip"
 
@@ -24,20 +22,38 @@ say() { echo "$*"; }
 has_cmd() { command -v "$1" >/dev/null 2>&1; }
 cmd_bool() { if has_cmd "$1"; then echo true; else echo false; fi; }
 
-ensure_dirs() {
-  mkdir -p "$CONFIG_DIR" "$DATA_DIR" "$PKG_DIR" 2>/dev/null || true
-  if [ ! -f "$SETTINGS" ]; then
+write_default_settings() {
+  cat > "$YAZI_SETTINGS" <<'JSON'
+{
+  "config_dir": "",
+  "data_dir": ""
+}
+JSON
+}
+
+ensure_settings() {
+  mkdir -p "$YAZI_PLUGIN_DIR"
+  if command -v jq >/dev/null 2>&1 && [ -f "$YAZI_SETTINGS" ] && ! jq empty "$YAZI_SETTINGS" >/dev/null 2>&1; then
+    cp -f "$YAZI_SETTINGS" "$YAZI_SETTINGS.bak.$(date +%s)" 2>/dev/null || true
+    rm -f "$YAZI_SETTINGS"
+  fi
+  if [ ! -f "$YAZI_SETTINGS" ]; then
     if [ -f "$SHARE_DIR/settings.json" ]; then
-      cp -f "$SHARE_DIR/settings.json" "$SETTINGS" 2>/dev/null || true
+      cp -f "$SHARE_DIR/settings.json" "$YAZI_SETTINGS"
     else
-      printf '{}\n' > "$SETTINGS" 2>/dev/null || true
+      write_default_settings
     fi
   fi
 }
 
+ensure_dirs() {
+  yazi_prepare
+  mkdir -p "$PKG_DIR" 2>/dev/null || true
+}
+
 current_version() {
-  if [ -x "$BIN" ]; then
-    "$BIN" --version 2>/dev/null | awk '/Version:/{print $2; exit}'
+  if [ -x "$YAZI_BIN" ]; then
+    "$YAZI_BIN" --version 2>/dev/null | awk '/Version:/{print $2; exit}'
   fi
 }
 
@@ -74,18 +90,25 @@ worker_running() {
   return 1
 }
 
-cmd_status() {
+cmd_prepare() {
+  ensure_settings
   ensure_dirs
+  return 0
+}
 
+cmd_status() {
   local installed=false version config_exists=false installing=false failed=false
   local missing_json="" dep first=true
 
-  [ -x "$BIN" ] && installed=true
+  ensure_settings
+  ensure_dirs
+
+  [ -x "$YAZI_BIN" ] && installed=true
   version="$(current_version)"
   [ -n "$version" ] || version="not installed"
 
   for f in yazi.toml keymap.toml theme.toml init.lua; do
-    if [ -f "$CONFIG_DIR/$f" ]; then
+    if [ -f "$YAZI_CONFIG_ROOT/$f" ]; then
       config_exists=true
       break
     fi
@@ -110,8 +133,10 @@ cmd_status() {
     missing_json+="\"$dep\""
   done
 
-  printf '{"installed":%s,"version":"%s","config":"%s","config_exists":%s,"command":"yazi","deps":{"file":%s,"rg":%s,"fd":%s,"fzf":%s,"zoxide":%s,"jq":%s,"ffmpeg":%s,"pdftoppm":%s,"7z":%s,"magick":%s,"resvg":%s,"git":%s,"udisksctl":%s,"zip":%s,"unzip":%s},"missing_deps":[%s],"deps_installing":%s,"deps_failed":%s,"deps_log":"%s"}\n' \
-    "$installed" "$version" "$CONFIG_DIR" "$config_exists" \
+  printf '{"installed":%s,"version":"%s","config":"%s","config_root":"%s","data":"%s","data_root":"%s","data_mode":"%s","config_mode":"%s","storage_mode":"%s","pool_root":"%s","config_exists":%s,"command":"yazi","deps":{"file":%s,"rg":%s,"fd":%s,"fzf":%s,"zoxide":%s,"jq":%s,"ffmpeg":%s,"pdftoppm":%s,"7z":%s,"magick":%s,"resvg":%s,"git":%s,"udisksctl":%s,"zip":%s,"unzip":%s},"missing_deps":[%s],"deps_installing":%s,"deps_failed":%s,"deps_log":"%s"}\n' \
+    "$installed" "$version" "$YAZI_CONFIG_ROOT" "$YAZI_CONFIG_ROOT" \
+    "$YAZI_DATA_ROOT" "$YAZI_DATA_ROOT" "$YAZI_DATA_MODE" "$YAZI_CONFIG_MODE" \
+    "$YAZI_STORAGE_MODE" "$YAZI_POOL_ROOT" "$config_exists" \
     "$(cmd_bool file)" "$(cmd_bool rg)" "$(cmd_bool fd)" "$(cmd_bool fzf)" \
     "$(cmd_bool zoxide)" "$(cmd_bool jq)" "$(cmd_bool ffmpeg)" "$(cmd_bool pdftoppm)" \
     "$(cmd_bool 7z)" "$(cmd_bool magick)" "$(cmd_bool resvg)" "$(cmd_bool git)" \
@@ -120,6 +145,7 @@ cmd_status() {
 }
 
 cmd_install_deps() {
+  ensure_settings
   ensure_dirs
   printf '%s\n' $DEPS > "$PKG_DIR/packages"
 
@@ -203,19 +229,20 @@ cmd_uninstall() {
   if [ -L /usr/bin/fd ] && [ "$(readlink /usr/bin/fd)" = "fdfind" ]; then
     rm -f /usr/bin/fd 2>/dev/null || true
   fi
-  say "Removed Yazi commands. Config and data kept in $PLG_DIR"
+  say "Removed Yazi commands. Config and data kept on the pool."
 }
 
-ensure_dirs
+ensure_settings
 
 case "${1:-}" in
   status) cmd_status ;;
   install_deps) cmd_install_deps ;;
   __install_deps_worker) cmd_install_deps_worker ;;
+  prepare) cmd_prepare ;;
   version) current_version ;;
   uninstall) cmd_uninstall ;;
   *)
-    echo "Usage: $0 {status|install_deps|version|uninstall}" >&2
+    echo "Usage: $0 {status|install_deps|prepare|version|uninstall}" >&2
     exit 2
     ;;
 esac

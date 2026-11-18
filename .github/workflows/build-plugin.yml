@@ -9,7 +9,7 @@ on:
       version:
         description: 'Plugin version, e.g. 0.1.0'
         required: true
-        default: '0.1.0'
+        default: '0.1.1'
 
 jobs:
   build:
@@ -99,8 +99,9 @@ jobs:
             chmod 0755 "${PKG_DIR}/usr/bin/yazi"
             cp ya-wrapper "${PKG_DIR}/usr/bin/ya"
             chmod 0755 "${PKG_DIR}/usr/bin/ya"
-            cp yazi-backend yazi-wrapper ya-wrapper functions settings.json packages "${PKG_DIR}/usr/share/yazi-plugin/"
+            cp yazi-backend yazi-wrapper ya-wrapper functions settings.json packages yazi-env "${PKG_DIR}/usr/share/yazi-plugin/"
             chmod 0755 "${PKG_DIR}/usr/share/yazi-plugin/yazi-backend" "${PKG_DIR}/usr/share/yazi-plugin/yazi-wrapper" "${PKG_DIR}/usr/share/yazi-plugin/ya-wrapper" "${PKG_DIR}/usr/share/yazi-plugin/functions"
+            chmod 0644 "${PKG_DIR}/usr/share/yazi-plugin/yazi-env"
             cp -R page/dist/yazi/. "${PKG_DIR}/var/www/mos-plugins/yazi/"
             cp images/yazi.png "${PKG_DIR}/var/www/mos-plugins/yazi/icon.png"
 
@@ -112,7 +113,7 @@ jobs:
           Section: utils
           Priority: optional
           Description: Yazi plugin for MOS
-           Blazing fast terminal file manager with previews.
+           Blazing fast terminal file manager with config and data on the MOS pool.
           EOF
 
             cp debian/postinst "${PKG_DIR}/DEBIAN/postinst"

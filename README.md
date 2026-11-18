@@ -13,8 +13,9 @@
 - 构建时把 Yazi 官方 release 的 `yazi` 和 `ya` 打进插件 `.deb`
 - `.deb` 安装二进制到 `/usr/lib/yazi`，安装 `/usr/bin/yazi`、`/usr/bin/ya` 包装脚本
 - MOS 启动时重新安装 `.deb`，恢复 `/usr/lib/yazi` 和 `/usr/bin`
-- `/boot` 只存 `.deb`、配置、数据和依赖包清单，不存 Yazi 二进制
-- 提供 MOS 插件页面：版本、配置路径、依赖状态、后台安装依赖
+- `/boot` 只存 `.deb`、`settings.json` 和依赖包清单，不存 Yazi 配置/数据
+- 配置和数据默认持久化到 `/mnt` 的 pool
+- 提供 MOS 插件页面：版本、pool 路径、配置/数据目录、依赖状态、后台安装依赖
 - 依赖清单持久化到 `packages/packages`，MOS 启动时自动恢复
 
 Yazi 本体的更新通过新的插件 Release（和 `mos-vim` 一样），页面不单独下载 Yazi。
@@ -28,6 +29,7 @@ mos-yazi/
 ├── functions
 ├── settings.json
 ├── packages                      # Hub 自动安装的依赖清单
+├── yazi-env                      # 共享路径解析
 ├── yazi-backend                  # /usr/bin/plugins/yazi
 ├── yazi-wrapper                  # /usr/bin/yazi
 ├── ya-wrapper                    # /usr/bin/ya
@@ -93,21 +95,21 @@ SSH 到普通 xterm/PuTTY 时通常没有图片预览，但文件管理、文本
 本地（当前架构）：
 
 ```bash
-./build.sh 0.1.0
+./build.sh 0.1.1
 ```
 
 输出：
 
 ```text
-build/yazi-0.1.0-1+mos-plugin_amd64.deb
-build/yazi-0.1.0-1+mos-plugin_amd64.deb.md5
+build/yazi-0.1.1-1+mos-plugin_amd64.deb
+build/yazi-0.1.1-1+mos-plugin_amd64.deb.md5
 ```
 
 GitHub Actions 会同时构建：
 
 ```text
-yazi-0.1.0-1+mos-plugin_amd64.deb
-yazi-0.1.0-1+mos-plugin_arm64.deb
+yazi-0.1.1-1+mos-plugin_amd64.deb
+yazi-0.1.1-1+mos-plugin_arm64.deb
 ```
 
 Hub 会根据机器架构选择对应的 `.deb`。
@@ -117,8 +119,8 @@ Hub 会根据机器架构选择对应的 `.deb`。
 ## 发布与安装
 
 ```bash
-git tag 0.1.0
-git push origin 0.1.0
+git tag 0.1.1
+git push origin 0.1.1
 ```
 
 在 MOS 添加索引仓库：
@@ -136,8 +138,8 @@ Refresh 后到 **Docker → MOS Hub → Plugins** 安装 **Yazi**。
 - `/usr/bin/yazi`：包装脚本
 - `/usr/bin/ya`：包装脚本
 - `/usr/bin/fd`：`fd-find` 的别名（如果系统没有 `fd`）
-- 配置：`/boot/optional/plugins/yazi/config`
-- 数据：`/boot/optional/plugins/yazi/data`
+- 配置：`/mnt/cache/appdata/yazi/config`（自动检测）
+- 数据：`/mnt/cache/appdata/yazi/data`（自动检测）
 - state/cache：`/run/yazi`（RAM）
 
 ---
@@ -153,15 +155,45 @@ Hub 安装器会把 `.deb` 和 `functions` 放到：
 启动时 `installplugins-mos` 重新安装该 `.deb`，恢复 `/usr/lib/yazi` 和
 `/usr/bin/yazi`、`/usr/bin/ya`。
 
-- 配置持久化在 `/boot/optional/plugins/yazi/config`
-- 数据（包括回收站）持久化在 `/boot/optional/plugins/yazi/data`
+配置和数据默认自动选择：
+
+```text
+/mnt/cache/appdata/yazi/config
+/mnt/cache/appdata/yazi/data
+```
+
+如果没有 `/mnt/cache`，会依次尝试：
+
+```text
+/mnt/user/appdata/yazi
+/mnt/disk*/appdata/yazi
+```
+
+如果都没有检测到可写 pool，才退回 `/run/yazi`（RAM），页面会显示警告。
+
+- 配置持久化在 pool 的 `.../yazi/config`
+- 数据（包括回收站）持久化在 pool 的 `.../yazi/data`
 - state/cache 在 `/run/yazi`，重启清空
 - 依赖清单在 `/boot/optional/plugins/yazi/packages/packages`
 - `fd` 别名在启动时由 `functions` 恢复
 
 `config`、`data`、`state`、`cache` 是独立的 XDG 根，不会互相覆盖。
-`/boot` 是 vfat/exFAT，不支持 Linux ownership；这里只写普通文件，
-不移动文件树。
+`/boot` 是 vfat/exFAT，不支持 Linux ownership；插件不再往 `/boot` 写配置或数据。
+
+从 0.1.0 升级时，旧的 `/boot/optional/plugins/yazi/config` 会复制到
+新的 pool 配置根；旧文件不会删除。
+
+---
+
+## 设置
+
+| 键 | 默认 | 说明 |
+| --- | --- | --- |
+| `config_dir` | `""` | 留空使用自动检测的 pool 路径；填了用该绝对路径作为 Yazi 配置目录 |
+| `data_dir` | `""` | 留空使用自动检测的 pool 路径；填 `/run/yazi/data` 可显式改回 RAM |
+
+页面会显示实际的 `config_root`、`data_root` 和 Persistent/RAM 状态。
+路径必须是绝对路径，且不能指向 `/boot`。
 
 ---
 
@@ -179,7 +211,7 @@ ya pkg add yazi-rs/plugins:max-preview
 ya pkg add yazi-rs/plugins:mount
 ```
 
-然后在 `/boot/optional/plugins/yazi/config/init.lua` 里按每个插件的 README
+然后在 pool 配置根下的 `init.lua` 里按每个插件的 README
 启用。`mount` 需要 `udisks2`，`git` 需要 `git`，`compress` 需要 `7z`/`zip`；
 这些都已经在基础依赖里。
 
@@ -205,7 +237,8 @@ ya pkg list
 Yazi 版本随 `.deb` 更新。
 
 **卸载**：卸载插件会移除 `/usr/lib/yazi`、`/usr/bin/yazi`、`/usr/bin/ya`
-和 `fd` 别名；`/boot/optional/plugins/yazi` 里的配置、数据和依赖清单会保留。
+和 `fd` 别名；pool 上的配置和数据不会删除；`/boot/optional/plugins/yazi` 里的
+`settings.json` 和依赖清单会保留。
 
 ---
 

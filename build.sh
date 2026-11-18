@@ -9,7 +9,7 @@ cd "$ROOT"
 
 VERSION="${1:-${VERSION:-}}"
 if [ -z "$VERSION" ]; then
-  VERSION="$(node -e "import('./page/plugin.config.js').then(m => console.log(m.default.version))" 2>/dev/null || echo 0.1.0)"
+  VERSION="$(node -e "import('./page/plugin.config.js').then(m => console.log(m.default.version))" 2>/dev/null || echo 0.1.1)"
 fi
 
 case "$(uname -m)" in
@@ -95,6 +95,7 @@ install -m 0755 "$ROOT/yazi-backend" "$PKG_DIR/usr/share/yazi-plugin/yazi-backen
 install -m 0755 "$ROOT/yazi-wrapper" "$PKG_DIR/usr/share/yazi-plugin/yazi-wrapper"
 install -m 0755 "$ROOT/ya-wrapper" "$PKG_DIR/usr/share/yazi-plugin/ya-wrapper"
 install -m 0755 "$ROOT/functions" "$PKG_DIR/usr/share/yazi-plugin/functions"
+install -m 0644 "$ROOT/yazi-env" "$PKG_DIR/usr/share/yazi-plugin/yazi-env"
 install -m 0644 "$ROOT/settings.json" "$PKG_DIR/usr/share/yazi-plugin/settings.json"
 install -m 0644 "$ROOT/packages" "$PKG_DIR/usr/share/yazi-plugin/packages"
 
@@ -109,7 +110,7 @@ Maintainer: hustyanzu
 Section: utils
 Priority: optional
 Description: Yazi plugin for MOS
- Blazing fast terminal file manager with previews.
+ Blazing fast terminal file manager with config and data on the MOS pool.
 EOF
 
 install -m 0755 "$ROOT/debian/postinst" "$PKG_DIR/DEBIAN/postinst"

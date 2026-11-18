@@ -7,7 +7,7 @@ HB="/usr/bin/plugins/yazi"
 SHARE_DIR="/usr/share/yazi-plugin"
 
 _restore() {
-  mkdir -p "$PLG_DIR/config" "$PLG_DIR/data" "$PLG_DIR/packages"
+  mkdir -p "$PLG_DIR/packages"
 
   for f in yazi-backend yazi-wrapper ya-wrapper functions; do
     if [ ! -f "$PLG_DIR/$f" ] && [ -f "$SHARE_DIR/$f" ]; then
@@ -43,6 +43,10 @@ _restore() {
 
   if [ ! -e /usr/bin/fd ] && command -v fdfind >/dev/null 2>&1; then
     ln -sf fdfind /usr/bin/fd 2>/dev/null || true
+  fi
+
+  if [ -x "$HB" ]; then
+    "$HB" prepare >/dev/null 2>&1 || true
   fi
 }
 

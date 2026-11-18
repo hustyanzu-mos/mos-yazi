@@ -9,6 +9,14 @@
         {{ error }}
       </v-alert>
 
+      <v-alert v-if="status.storage_mode === 'memory'" type="warning" variant="tonal" class="mb-4">
+        <div class="font-weight-medium">Using RAM instead of a pool</div>
+        <div class="text-body-2 mt-1">
+          No writable pool was detected, or the configured path is under /run. Config and data will be lost on reboot.
+          Set a pool path such as /mnt/cache/appdata/yazi below.
+        </div>
+      </v-alert>
+
       <v-card class="mb-4 pa-0">
         <v-card-title class="d-flex align-center">
           <v-icon class="mr-2">mdi-file-tree</v-icon>
@@ -20,20 +28,27 @@
         </v-card-title>
         <v-card-text>
           <v-row>
-            <v-col cols="12" md="4">
+            <v-col cols="12" md="3">
               <div class="text-caption text-medium-emphasis">Version</div>
               <div class="text-subtitle-1 font-weight-medium">{{ status.version || 'Not installed' }}</div>
             </v-col>
-            <v-col cols="12" md="4">
+            <v-col cols="12" md="3">
               <div class="text-caption text-medium-emphasis">Commands</div>
               <div class="text-subtitle-1 font-weight-medium"><code>yazi</code> / <code>ya</code></div>
             </v-col>
-            <v-col cols="12" md="4">
-              <div class="text-caption text-medium-emphasis">Config</div>
-              <div class="text-body-2 font-weight-medium">{{ status.config || '-' }}</div>
-              <v-chip :color="status.config_exists ? 'success' : 'grey'" size="x-small" variant="tonal" class="mt-1">
-                {{ status.config_exists ? 'Custom config' : 'Built-in defaults' }}
+            <v-col cols="12" md="3">
+              <div class="text-caption text-medium-emphasis">Storage</div>
+              <v-chip
+                size="small"
+                :color="status.storage_mode === 'persistent' ? 'success' : 'warning'"
+                variant="tonal"
+              >
+                {{ status.storage_mode === 'persistent' ? 'Pool' : 'RAM' }}
               </v-chip>
+            </v-col>
+            <v-col cols="12" md="3">
+              <div class="text-caption text-medium-emphasis">Pool</div>
+              <div class="text-body-2">{{ status.pool_root || 'Not detected' }}</div>
             </v-col>
           </v-row>
 
@@ -91,11 +106,79 @@
           </div>
 
           <p class="text-caption text-medium-emphasis mt-2">
-            The list is saved to <code>/boot/optional/plugins/yazi/packages/packages</code> so MOS can restore the packages at boot.
+            The package list is saved to <code>/boot/optional/plugins/yazi/packages/packages</code> so MOS can restore the packages at boot.
           </p>
           <p class="text-caption text-medium-emphasis">
             Image preview also requires a terminal that supports Kitty graphics, Sixel, or iTerm2 images.
           </p>
+        </v-card-text>
+      </v-card>
+
+      <v-card class="mb-4 pa-0">
+        <v-card-title class="d-flex align-center">
+          <v-icon class="mr-2">mdi-file-cog-outline</v-icon>
+          <span>Configuration</span>
+        </v-card-title>
+        <v-card-text>
+          <v-text-field
+            v-model="form.config_dir"
+            label="Config directory"
+            hint="Empty uses the auto-detected pool path. This is the Yazi config directory that contains yazi.toml and plugins."
+            persistent-hint
+            density="compact"
+            variant="outlined"
+            class="mb-4"
+          />
+          <v-text-field
+            v-model="form.data_dir"
+            label="Data directory"
+            hint="Empty uses the auto-detected pool path. Use /run/yazi/data only if you explicitly want RAM."
+            persistent-hint
+            density="compact"
+            variant="outlined"
+            class="mb-4"
+          />
+
+          <v-row class="mb-2">
+            <v-col cols="12" md="6">
+              <div class="text-caption text-medium-emphasis">Current config root</div>
+              <div class="text-body-2">{{ status.config_root || '-' }}</div>
+              <v-chip
+                size="x-small"
+                :color="status.config_mode === 'persistent' ? 'success' : 'warning'"
+                variant="tonal"
+                class="mt-1"
+              >
+                {{ status.config_mode === 'persistent' ? 'Persistent' : 'RAM' }}
+              </v-chip>
+            </v-col>
+            <v-col cols="12" md="6">
+              <div class="text-caption text-medium-emphasis">Current data root</div>
+              <div class="text-body-2">{{ status.data_root || '-' }}</div>
+              <v-chip
+                size="x-small"
+                :color="status.data_mode === 'persistent' ? 'success' : 'warning'"
+                variant="tonal"
+                class="mt-1"
+              >
+                {{ status.data_mode === 'persistent' ? 'Persistent' : 'RAM' }}
+              </v-chip>
+            </v-col>
+          </v-row>
+
+          <p class="text-body-2 text-medium-emphasis mt-2">
+            State and cache stay in <code>/run/yazi</code> and are cleared on reboot.
+            Config and data are kept on the pool and are not removed by plugin uninstall.
+          </p>
+
+          <div class="d-flex flex-wrap ga-2 mt-4">
+            <v-btn size="small" color="primary" :loading="saving" @click="saveSettings">
+              <v-icon start>mdi-content-save</v-icon>
+              Save settings
+            </v-btn>
+            <v-btn size="small" variant="text" @click="usePoolDefaults">Use pool defaults</v-btn>
+            <v-btn size="small" variant="text" @click="useRamData">Use RAM for data</v-btn>
+          </div>
         </v-card-text>
       </v-card>
 
@@ -109,7 +192,8 @@
 yazi /mnt/cache
 ya pkg add yazi-rs/plugins:smart-enter</pre>
           <p class="text-caption text-medium-emphasis mt-2">
-            Config and data live under <code>/boot/optional/plugins/yazi</code>. State and cache live in <code>/run/yazi</code> and are cleared on reboot.
+            Yazi config: <code>{{ status.config_root || '-' }}</code><br />
+            Data: <code>{{ status.data_root || '-' }}</code>
           </p>
         </v-card-text>
       </v-card>
@@ -121,7 +205,7 @@ ya pkg add yazi-rs/plugins:smart-enter</pre>
         </v-card-title>
         <v-card-text>
           <p class="text-body-2 mb-3">
-            <code>ya</code> installs plugins into the persistent config directory.
+            <code>ya</code> installs plugins into the persistent pool config directory.
           </p>
           <pre class="yazi-code">{{ pluginCommands }}</pre>
           <div class="d-flex flex-wrap ga-2 mt-3">
@@ -144,18 +228,29 @@ ya pkg add yazi-rs/plugins:smart-enter</pre>
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue';
 
 const PLUGIN_NAME = 'yazi';
+const DEFAULT_SETTINGS = { config_dir: '', data_dir: '' };
 
 const loading = ref(true);
+const saving = ref(false);
 const error = ref('');
 const snackbar = ref(false);
 const snackbarText = ref('');
 const snackbarColor = ref('success');
 const installBusy = ref(false);
 
+const settings = reactive({ ...DEFAULT_SETTINGS });
+const form = reactive({ config_dir: '', data_dir: '' });
 const status = reactive({
   installed: false,
   version: '',
   config: '',
+  config_root: '',
+  data: '',
+  data_root: '',
+  data_mode: 'memory',
+  config_mode: 'memory',
+  storage_mode: 'memory',
+  pool_root: '',
   config_exists: false,
   command: 'yazi',
   deps: {},
@@ -246,12 +341,31 @@ async function query(args, parseJson = false, timeout = 60) {
   return data;
 }
 
+async function fetchSettings() {
+  const res = await fetch(`/api/v1/mos/plugins/settings/${PLUGIN_NAME}`, { headers: authHeaders() });
+  if (!res.ok) throw new Error(`Settings request failed: HTTP ${res.status}`);
+  const raw = await res.json();
+  const data = raw && raw.data && typeof raw.data === 'object' ? raw.data : raw;
+  for (const key of Object.keys(DEFAULT_SETTINGS)) {
+    if (data[key] !== undefined && data[key] !== null) settings[key] = data[key];
+  }
+  form.config_dir = settings.config_dir || '';
+  form.data_dir = settings.data_dir || '';
+}
+
 async function refreshStatus() {
   const data = await query(['status'], true, 10);
   const out = parseOutput(data) || {};
   status.installed = out.installed === true;
   status.version = out.version || '';
   status.config = out.config || '';
+  status.config_root = out.config_root || '';
+  status.data = out.data || '';
+  status.data_root = out.data_root || '';
+  status.data_mode = out.data_mode || 'memory';
+  status.config_mode = out.config_mode || 'memory';
+  status.storage_mode = out.storage_mode || 'memory';
+  status.pool_root = out.pool_root || '';
   status.config_exists = out.config_exists === true;
   status.command = out.command || 'yazi';
   status.deps = out.deps || {};
@@ -264,11 +378,64 @@ async function refreshStatus() {
 async function refreshAll() {
   loading.value = true;
   try {
+    await fetchSettings();
     await refreshStatus();
   } catch (e) {
     setError(e);
   } finally {
     loading.value = false;
+  }
+}
+
+function usePoolDefaults() {
+  form.config_dir = '';
+  form.data_dir = '';
+  notify('Pool defaults selected; click Save settings');
+}
+
+function useRamData() {
+  form.data_dir = '/run/yazi/data';
+  notify('RAM data selected; click Save settings');
+}
+
+function validatePath(label, value) {
+  if (!value) return;
+  if (!value.startsWith('/')) {
+    throw new Error(`${label} must be an absolute path`);
+  }
+  if (value === '/boot' || value.startsWith('/boot/')) {
+    throw new Error(`${label} must be on a pool such as /mnt/cache/appdata/yazi, not /boot`);
+  }
+  if (!value.startsWith('/mnt/') && value !== '/run' && !value.startsWith('/run/') && value !== '/tmp' && !value.startsWith('/tmp/')) {
+    throw new Error(`${label} must be under /mnt, /run, or /tmp`);
+  }
+}
+
+async function saveSettings() {
+  saving.value = true;
+  try {
+    const configDir = form.config_dir.trim();
+    const dataDir = form.data_dir.trim();
+    validatePath('Config directory', configDir);
+    validatePath('Data directory', dataDir);
+    if (configDir && dataDir && configDir === dataDir) {
+      throw new Error('Config and data directories must be different');
+    }
+
+    const res = await fetch(`/api/v1/mos/plugins/settings/${PLUGIN_NAME}`, {
+      method: 'POST',
+      headers: jsonHeaders(),
+      body: JSON.stringify({ config_dir: configDir, data_dir: dataDir }),
+    });
+    if (!res.ok) throw new Error(`Save failed: HTTP ${res.status}`);
+    settings.config_dir = configDir;
+    settings.data_dir = dataDir;
+    await refreshStatus();
+    notify('Settings saved');
+  } catch (e) {
+    setError(e);
+  } finally {
+    saving.value = false;
   }
 }
 
