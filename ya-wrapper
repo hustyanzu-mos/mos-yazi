@@ -1,6 +1,6 @@
 #!/bin/sh
 # Yazi package manager wrapper for MOS.
-# Keeps `ya pkg add` writes in the persistent pool config directory.
+# Keeps `ya pkg add` writes in the configured app directory.
 
 . "${YAZI_ENV:-/usr/share/yazi-plugin/yazi-env}"
 

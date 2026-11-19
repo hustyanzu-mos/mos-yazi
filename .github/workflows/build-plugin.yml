@@ -9,7 +9,7 @@ on:
       version:
         description: 'Plugin version, e.g. 0.1.0'
         required: true
-        default: '0.1.1'
+        default: '0.2.0'
 
 jobs:
   build:
@@ -113,7 +113,7 @@ jobs:
           Section: utils
           Priority: optional
           Description: Yazi plugin for MOS
-           Blazing fast terminal file manager with config and data on the MOS pool.
+           Blazing fast terminal file manager with optional user-selected app directory.
           EOF
 
             cp debian/postinst "${PKG_DIR}/DEBIAN/postinst"

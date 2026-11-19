@@ -1,6 +1,6 @@
 #!/bin/sh
 # Shared path resolution for the Yazi MOS plugin.
-# Sourced by yazi-wrapper and ya-wrapper.
+# No automatic path detection. Persistence is opt-in through one user setting.
 
 YAZI_PLUGIN_DIR="${YAZI_PLUGIN_DIR:-/boot/optional/plugins/yazi}"
 YAZI_SETTINGS="${YAZI_SETTINGS:-$YAZI_PLUGIN_DIR/settings.json}"
@@ -18,71 +18,25 @@ yazi_setting() {
   fi
 }
 
-yazi_is_mount() {
-  [ -d "$1" ] || return 1
-  awk -v p="$1" '$2 == p { found = 1 } END { exit !found }' /proc/mounts 2>/dev/null
-}
-
-yazi_pick_pool() {
-  local parent appdata
-  for parent in /mnt/cache /mnt/user /mnt/disk*; do
-    [ -d "$parent" ] || continue
-    yazi_is_mount "$parent" || continue
-    appdata="$parent/appdata"
-    mkdir -p "$appdata" 2>/dev/null || continue
-    [ -w "$appdata" ] && { printf '%s\n' "$appdata"; return 0; }
-  done
-  return 1
-}
-
-yazi_path_mode() {
-  case "$1" in
-    /mnt/*) printf 'persistent\n' ;;
-    *) printf 'memory\n' ;;
-  esac
-}
-
 yazi_resolve_paths() {
-  local config_setting data_setting pool default_root
-
-  config_setting="$(yazi_setting config_dir)"
+  local data_setting
   data_setting="$(yazi_setting data_dir)"
 
-  if pool="$(yazi_pick_pool)"; then
-    YAZI_POOL_ROOT="$pool"
-    YAZI_STORAGE_MODE="persistent"
-    default_root="$pool/yazi"
+  if [ -n "$data_setting" ]; then
+    YAZI_APP_ROOT="$data_setting"
+    YAZI_STORAGE_MODE="custom"
   else
-    YAZI_POOL_ROOT=""
-    YAZI_STORAGE_MODE="memory"
-    default_root="$YAZI_RAM_DIR"
+    YAZI_APP_ROOT="$YAZI_RAM_DIR"
+    YAZI_STORAGE_MODE="ram"
   fi
 
-  YAZI_CONFIG_ROOT="${config_setting:-$default_root/config}"
-  YAZI_DATA_ROOT="${data_setting:-$default_root/data}"
-  YAZI_STATE_ROOT="$YAZI_RAM_DIR/state"
-  YAZI_CACHE_ROOT="$YAZI_RAM_DIR/cache"
-
-  YAZI_CONFIG_MODE="$(yazi_path_mode "$YAZI_CONFIG_ROOT")"
-  YAZI_DATA_MODE="$(yazi_path_mode "$YAZI_DATA_ROOT")"
-  if [ "$YAZI_CONFIG_MODE" = "memory" ] || [ "$YAZI_DATA_MODE" = "memory" ]; then
-    YAZI_STORAGE_MODE="memory"
-  fi
-}
-
-yazi_migrate_config() {
-  local old="$YAZI_PLUGIN_DIR/config"
-  [ "$YAZI_CONFIG_ROOT" = "$old" ] && return 0
-  [ -d "$old" ] || return 0
-  if [ -d "$YAZI_CONFIG_ROOT" ] && [ -n "$(ls -A "$YAZI_CONFIG_ROOT" 2>/dev/null)" ]; then
-    return 0
-  fi
-  mkdir -p "$YAZI_CONFIG_ROOT" 2>/dev/null || return 0
-  cp -a "$old/." "$YAZI_CONFIG_ROOT/" 2>/dev/null || true
+  YAZI_CONFIG_ROOT="$YAZI_APP_ROOT/config"
+  YAZI_DATA_ROOT="$YAZI_APP_ROOT/data"
+  YAZI_STATE_ROOT="$YAZI_APP_ROOT/state"
+  YAZI_CACHE_ROOT="$YAZI_APP_ROOT/cache"
 }
 
 yazi_prepare() {
   yazi_resolve_paths
-  yazi_migrate_config
   mkdir -p "$YAZI_CONFIG_ROOT" "$YAZI_DATA_ROOT" "$YAZI_STATE_ROOT" "$YAZI_CACHE_ROOT" 2>/dev/null || true
 }

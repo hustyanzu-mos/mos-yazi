@@ -1,7 +1,7 @@
 #!/bin/bash
 # Yazi backend for MOS.
 # The Yazi binaries are installed by the plugin .deb under /usr/lib/yazi.
-# Config and data live on a mounted pool; state and cache live in RAM.
+# Config, data, state, and cache stay in RAM unless an app directory is configured.
 # Dependencies are installed in the background because MOS plugin queries
 # have a 60 second limit.
 
@@ -16,7 +16,11 @@ FAILED_FILE="$PKG_DIR/.failed"
 LOG_FILE="$PKG_DIR/install.log"
 SHARE_DIR="$YAZI_SHARE_DIR"
 
-DEPS="file ripgrep fd-find fzf zoxide jq ffmpeg poppler-utils p7zip-full resvg imagemagick git udisks2 zip unzip"
+CORE_DEPS="file"
+SEARCH_DEPS="ripgrep fd-find fzf zoxide jq"
+MEDIA_DEPS="ffmpeg poppler-utils p7zip-full imagemagick"
+EXTRA_DEPS="resvg udisks2 git zip unzip"
+DEPS="$CORE_DEPS $SEARCH_DEPS $MEDIA_DEPS $EXTRA_DEPS"
 
 say() { echo "$*"; }
 has_cmd() { command -v "$1" >/dev/null 2>&1; }
@@ -25,7 +29,6 @@ cmd_bool() { if has_cmd "$1"; then echo true; else echo false; fi; }
 write_default_settings() {
   cat > "$YAZI_SETTINGS" <<'JSON'
 {
-  "config_dir": "",
   "data_dir": ""
 }
 JSON
@@ -55,6 +58,46 @@ current_version() {
   if [ -x "$YAZI_BIN" ]; then
     "$YAZI_BIN" --version 2>/dev/null | awk '/Version:/{print $2; exit}'
   fi
+}
+
+dep_command() {
+  case "$1" in
+    file) echo file ;;
+    ripgrep) echo rg ;;
+    fd-find) echo fd ;;
+    fzf) echo fzf ;;
+    zoxide) echo zoxide ;;
+    jq) echo jq ;;
+    git) echo git ;;
+    zip) echo zip ;;
+    unzip) echo unzip ;;
+    ffmpeg) echo ffmpeg ;;
+    poppler-utils) echo pdftoppm ;;
+    p7zip-full) echo 7z ;;
+    resvg) echo resvg ;;
+    imagemagick) echo magick ;;
+    udisks2) echo udisksctl ;;
+    *) echo "$1" ;;
+  esac
+}
+
+group_deps() {
+  case "$1" in
+    core) echo "$CORE_DEPS" ;;
+    search) echo "$SEARCH_DEPS" ;;
+    media) echo "$MEDIA_DEPS" ;;
+    extras) echo "$EXTRA_DEPS" ;;
+    all) echo "$DEPS" ;;
+    *) return 1 ;;
+  esac
+}
+
+group_missing() {
+  local deps pkg
+  deps="$(group_deps "$1")" || return 1
+  for pkg in $deps; do
+    has_cmd "$(dep_command "$pkg")" || echo "$pkg"
+  done
 }
 
 missing_deps() {
@@ -133,10 +176,9 @@ cmd_status() {
     missing_json+="\"$dep\""
   done
 
-  printf '{"installed":%s,"version":"%s","config":"%s","config_root":"%s","data":"%s","data_root":"%s","data_mode":"%s","config_mode":"%s","storage_mode":"%s","pool_root":"%s","config_exists":%s,"command":"yazi","deps":{"file":%s,"rg":%s,"fd":%s,"fzf":%s,"zoxide":%s,"jq":%s,"ffmpeg":%s,"pdftoppm":%s,"7z":%s,"magick":%s,"resvg":%s,"git":%s,"udisksctl":%s,"zip":%s,"unzip":%s},"missing_deps":[%s],"deps_installing":%s,"deps_failed":%s,"deps_log":"%s"}\n' \
-    "$installed" "$version" "$YAZI_CONFIG_ROOT" "$YAZI_CONFIG_ROOT" \
-    "$YAZI_DATA_ROOT" "$YAZI_DATA_ROOT" "$YAZI_DATA_MODE" "$YAZI_CONFIG_MODE" \
-    "$YAZI_STORAGE_MODE" "$YAZI_POOL_ROOT" "$config_exists" \
+  printf '{"installed":%s,"version":"%s","app_root":"%s","storage_mode":"%s","config":"%s","config_root":"%s","data":"%s","data_root":"%s","config_exists":%s,"command":"yazi","deps":{"file":%s,"rg":%s,"fd":%s,"fzf":%s,"zoxide":%s,"jq":%s,"ffmpeg":%s,"pdftoppm":%s,"7z":%s,"magick":%s,"resvg":%s,"git":%s,"udisksctl":%s,"zip":%s,"unzip":%s},"missing_deps":[%s],"deps_installing":%s,"deps_failed":%s,"deps_log":"%s"}\n' \
+    "$installed" "$version" "$YAZI_APP_ROOT" "$YAZI_STORAGE_MODE" \
+    "$YAZI_CONFIG_ROOT" "$YAZI_CONFIG_ROOT" "$YAZI_DATA_ROOT" "$YAZI_DATA_ROOT" "$config_exists" \
     "$(cmd_bool file)" "$(cmd_bool rg)" "$(cmd_bool fd)" "$(cmd_bool fzf)" \
     "$(cmd_bool zoxide)" "$(cmd_bool jq)" "$(cmd_bool ffmpeg)" "$(cmd_bool pdftoppm)" \
     "$(cmd_bool 7z)" "$(cmd_bool magick)" "$(cmd_bool resvg)" "$(cmd_bool git)" \
@@ -144,38 +186,55 @@ cmd_status() {
     "$missing_json" "$installing" "$failed" "$LOG_FILE"
 }
 
-cmd_install_deps() {
-  ensure_settings
-  ensure_dirs
-  printf '%s\n' $DEPS > "$PKG_DIR/packages"
-
+cmd_start_deps_worker() {
+  local group="$1"
   local missing
-  missing="$(missing_deps | tr '\n' ' ')"
+  missing="$(group_missing "$group" | tr '\n' ' ')"
   if [ -z "$missing" ]; then
     rm -f "$FAILED_FILE" 2>/dev/null || true
-    say "All basic dependencies are already installed"
+    say "Dependencies for '$group' are already installed"
     return 0
   fi
-
   if worker_running; then
     say "Dependency installation is already running"
     return 0
   fi
-
   rm -f "$FAILED_FILE" 2>/dev/null || true
   if command -v setsid >/dev/null 2>&1; then
-    setsid /bin/bash "$0" __install_deps_worker >/dev/null 2>&1 < /dev/null &
+    setsid /bin/bash "$0" __install_deps_worker "$group" >/dev/null 2>&1 < /dev/null &
   else
-    nohup /bin/bash "$0" __install_deps_worker >/dev/null 2>&1 < /dev/null &
+    nohup /bin/bash "$0" __install_deps_worker "$group" >/dev/null 2>&1 < /dev/null &
   fi
   sleep 0.2
-  say "Dependency installation started in the background"
+  say "Dependency installation started in the background: $group"
+}
+
+cmd_install_deps() {
+  ensure_settings
+  ensure_dirs
+  # The boot-time list is only the required package.
+  printf '%s\n' $CORE_DEPS > "$PKG_DIR/packages"
+  cmd_start_deps_worker core
+}
+
+cmd_install_group() {
+  ensure_settings
+  ensure_dirs
+  local group="${1:-}"
+  if ! group_deps "$group" >/dev/null 2>&1; then
+    echo "Unknown dependency group: $group" >&2
+    return 2
+  fi
+  cmd_start_deps_worker "$group"
 }
 
 cmd_install_deps_worker() {
+  local group="${1:-core}"
+  local deps
+  deps="$(group_deps "$group")" || exit 2
   echo "$(current_boot_id) $$" > "$PID_FILE"
   exec >>"$LOG_FILE" 2>&1
-  echo "=== Yazi dependencies: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  echo "=== Yazi dependencies ($group): $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
   local apt=apt-get
   if command -v apt-get.orig >/dev/null 2>&1; then
@@ -186,19 +245,35 @@ cmd_install_deps_worker() {
   rm -f "$PKG_DIR"/*.deb 2>/dev/null || true
 
   DEBIAN_FRONTEND=noninteractive "$apt" update || rc=1
-  if [ "$rc" -eq 0 ]; then
-    DEBIAN_FRONTEND=noninteractive "$apt" install -y --download-only --no-install-recommends \
-      -o Dir::Cache::archives="$PKG_DIR" $DEPS || rc=1
-  fi
 
-  local -a debs=()
-  local f
-  for f in "$PKG_DIR"/*.deb; do
-    [ -f "$f" ] && debs+=("$f")
+  install_one() {
+    local pkg="$1"
+    local -a debs=()
+    local f
+    rm -f "$PKG_DIR"/*.deb 2>/dev/null || true
+    if ! DEBIAN_FRONTEND=noninteractive "$apt" install -y --download-only --no-install-recommends \
+      -o Dir::Cache::archives="$PKG_DIR" "$pkg" >/dev/null 2>&1; then
+      echo "Download failed: $pkg"
+      return 1
+    fi
+    for f in "$PKG_DIR"/*.deb; do
+      [ -f "$f" ] && debs+=("$f")
+    done
+    if [ ${#debs[@]} -gt 0 ]; then
+      if ! dpkg -i "${debs[@]}" >/dev/null 2>&1; then
+        echo "dpkg failed: $pkg"
+        return 1
+      fi
+    fi
+    echo "Installed: $pkg"
+    return 0
+  }
+
+  local pkg
+  for pkg in $deps; do
+    has_cmd "$(dep_command "$pkg")" && continue
+    install_one "$pkg" || rc=1
   done
-  if [ ${#debs[@]} -gt 0 ]; then
-    dpkg -i "${debs[@]}" || rc=1
-  fi
 
   dpkg --configure -a >/dev/null 2>&1 || true
   ldconfig 2>/dev/null || true
@@ -208,18 +283,18 @@ cmd_install_deps_worker() {
   fi
 
   local missing
-  missing="$(missing_deps | tr '\n' ' ')"
+  missing="$(group_missing "$group" | tr '\n' ' ')"
   rm -f "$PID_FILE" 2>/dev/null || true
 
   if [ -z "$missing" ]; then
     rm -f "$FAILED_FILE" 2>/dev/null || true
-    echo "Success: all basic dependencies are installed"
+    echo "Success: dependencies for '$group' are installed"
     echo "=== finished"
     exit 0
   fi
 
-  printf 'Missing: %s\n' "$missing" > "$FAILED_FILE"
-  echo "Failure: still missing: $missing"
+  printf 'Missing (%s): %s\n' "$group" "$missing" > "$FAILED_FILE"
+  echo "Failure: still missing for '$group': $missing"
   echo "=== finished"
   exit 1
 }
@@ -229,7 +304,7 @@ cmd_uninstall() {
   if [ -L /usr/bin/fd ] && [ "$(readlink /usr/bin/fd)" = "fdfind" ]; then
     rm -f /usr/bin/fd 2>/dev/null || true
   fi
-  say "Removed Yazi commands. Config and data kept on the pool."
+  say "Removed Yazi commands. RAM data is discarded; a configured app directory is kept."
 }
 
 ensure_settings
@@ -237,7 +312,8 @@ ensure_settings
 case "${1:-}" in
   status) cmd_status ;;
   install_deps) cmd_install_deps ;;
-  __install_deps_worker) cmd_install_deps_worker ;;
+  install_group) cmd_install_group "${2:-}" ;;
+  __install_deps_worker) cmd_install_deps_worker "${2:-core}" ;;
   prepare) cmd_prepare ;;
   version) current_version ;;
   uninstall) cmd_uninstall ;;

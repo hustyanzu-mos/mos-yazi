@@ -9,11 +9,11 @@
         {{ error }}
       </v-alert>
 
-      <v-alert v-if="status.storage_mode === 'memory'" type="warning" variant="tonal" class="mb-4">
-        <div class="font-weight-medium">Using RAM instead of a pool</div>
+      <v-alert v-if="status.storage_mode === 'ram'" type="warning" variant="tonal" class="mb-4">
+        <div class="font-weight-medium">Everything is in RAM</div>
         <div class="text-body-2 mt-1">
-          No writable pool was detected, or the configured path is under /run. Config and data will be lost on reboot.
-          Set a pool path such as /mnt/cache/appdata/yazi below.
+          No app directory is configured. Config, data, state, and cache will be lost on reboot.
+          Set one absolute directory below to persist this app.
         </div>
       </v-alert>
 
@@ -40,15 +40,15 @@
               <div class="text-caption text-medium-emphasis">Storage</div>
               <v-chip
                 size="small"
-                :color="status.storage_mode === 'persistent' ? 'success' : 'warning'"
+                :color="status.storage_mode === 'custom' ? 'success' : 'info'"
                 variant="tonal"
               >
-                {{ status.storage_mode === 'persistent' ? 'Pool' : 'RAM' }}
+                {{ status.storage_mode === 'custom' ? 'Configured directory' : 'RAM' }}
               </v-chip>
             </v-col>
             <v-col cols="12" md="3">
-              <div class="text-caption text-medium-emphasis">Pool</div>
-              <div class="text-body-2">{{ status.pool_root || 'Not detected' }}</div>
+              <div class="text-caption text-medium-emphasis">App root</div>
+              <div class="text-body-2">{{ status.app_root || '-' }}</div>
             </v-col>
           </v-row>
 
@@ -77,9 +77,30 @@
 
           <v-progress-linear v-if="status.deps_installing" indeterminate color="primary" class="mb-4" />
 
-          <div v-for="group in depGroups" :key="group.title" class="mb-3">
-            <div class="text-caption text-medium-emphasis">{{ group.title }}</div>
-            <div class="d-flex flex-wrap ga-2 mt-1">
+          <div v-for="group in depGroups" :key="group.key" class="mb-4">
+            <div class="d-flex align-center flex-wrap ga-2">
+              <div class="text-subtitle-2">{{ group.title }}</div>
+              <v-chip
+                size="x-small"
+                :color="groupMissing(group) ? 'warning' : 'success'"
+                variant="tonal"
+              >
+                {{ groupMissing(group) ? `${groupMissing(group)} missing` : 'Ready' }}
+              </v-chip>
+              <v-spacer />
+              <v-btn
+                v-if="groupMissing(group)"
+                size="x-small"
+                variant="tonal"
+                :loading="installingGroup === group.key"
+                :disabled="status.deps_installing"
+                @click="installGroup(group.key)"
+              >
+                Install
+              </v-btn>
+            </div>
+            <div class="text-caption text-medium-emphasis mt-1">{{ group.note }}</div>
+            <div class="d-flex flex-wrap ga-2 mt-2">
               <v-chip
                 v-for="dep in group.deps"
                 :key="dep.key"
@@ -93,20 +114,9 @@
             </div>
           </div>
 
-          <div class="d-flex flex-wrap ga-2 mt-4">
-            <v-btn
-              size="small"
-              color="primary"
-              :loading="installBusy"
-              :disabled="status.deps_installing"
-              @click="installDeps"
-            >
-              Install basic dependencies
-            </v-btn>
-          </div>
-
           <p class="text-caption text-medium-emphasis mt-2">
-            The package list is saved to <code>/boot/optional/plugins/yazi/packages/packages</code> so MOS can restore the packages at boot.
+            Only <code>file</code> is installed automatically. The media group is a large download
+            and is only needed for video, PDF, archive, and AVIF/HEIC/JXL previews.
           </p>
           <p class="text-caption text-medium-emphasis">
             Image preview also requires a terminal that supports Kitty graphics, Sixel, or iTerm2 images.
@@ -121,18 +131,9 @@
         </v-card-title>
         <v-card-text>
           <v-text-field
-            v-model="form.config_dir"
-            label="Config directory"
-            hint="Empty uses the auto-detected pool path. This is the Yazi config directory that contains yazi.toml and plugins."
-            persistent-hint
-            density="compact"
-            variant="outlined"
-            class="mb-4"
-          />
-          <v-text-field
             v-model="form.data_dir"
-            label="Data directory"
-            hint="Empty uses the auto-detected pool path. Use /run/yazi/data only if you explicitly want RAM."
+            label="App directory (optional)"
+            hint="Empty uses RAM (/run/yazi). Set one absolute directory; config, data, state, and cache go under it."
             persistent-hint
             density="compact"
             variant="outlined"
@@ -141,34 +142,19 @@
 
           <v-row class="mb-2">
             <v-col cols="12" md="6">
-              <div class="text-caption text-medium-emphasis">Current config root</div>
-              <div class="text-body-2">{{ status.config_root || '-' }}</div>
-              <v-chip
-                size="x-small"
-                :color="status.config_mode === 'persistent' ? 'success' : 'warning'"
-                variant="tonal"
-                class="mt-1"
-              >
-                {{ status.config_mode === 'persistent' ? 'Persistent' : 'RAM' }}
-              </v-chip>
+              <div class="text-caption text-medium-emphasis">Current app root</div>
+              <div class="text-body-2">{{ status.app_root || '-' }}</div>
             </v-col>
             <v-col cols="12" md="6">
-              <div class="text-caption text-medium-emphasis">Current data root</div>
-              <div class="text-body-2">{{ status.data_root || '-' }}</div>
-              <v-chip
-                size="x-small"
-                :color="status.data_mode === 'persistent' ? 'success' : 'warning'"
-                variant="tonal"
-                class="mt-1"
-              >
-                {{ status.data_mode === 'persistent' ? 'Persistent' : 'RAM' }}
-              </v-chip>
+              <div class="text-caption text-medium-emphasis">Yazi config</div>
+              <div class="text-body-2">{{ status.config_root || '-' }}</div>
             </v-col>
           </v-row>
 
           <p class="text-body-2 text-medium-emphasis mt-2">
-            State and cache stay in <code>/run/yazi</code> and are cleared on reboot.
-            Config and data are kept on the pool and are not removed by plugin uninstall.
+            With an app directory, Yazi keeps <code>config/</code>, <code>data/</code>,
+            <code>state/</code>, and <code>cache/</code> inside it. With no directory, all four
+            are in <code>/run/yazi</code> and are discarded on reboot.
           </p>
 
           <div class="d-flex flex-wrap ga-2 mt-4">
@@ -176,8 +162,7 @@
               <v-icon start>mdi-content-save</v-icon>
               Save settings
             </v-btn>
-            <v-btn size="small" variant="text" @click="usePoolDefaults">Use pool defaults</v-btn>
-            <v-btn size="small" variant="text" @click="useRamData">Use RAM for data</v-btn>
+            <v-btn size="small" variant="text" @click="useRam">Use RAM</v-btn>
           </div>
         </v-card-text>
       </v-card>
@@ -205,7 +190,7 @@ ya pkg add yazi-rs/plugins:smart-enter</pre>
         </v-card-title>
         <v-card-text>
           <p class="text-body-2 mb-3">
-            <code>ya</code> installs plugins into the persistent pool config directory.
+            <code>ya</code> installs plugins into the configured app directory.
           </p>
           <pre class="yazi-code">{{ pluginCommands }}</pre>
           <div class="d-flex flex-wrap ga-2 mt-3">
@@ -228,7 +213,7 @@ ya pkg add yazi-rs/plugins:smart-enter</pre>
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue';
 
 const PLUGIN_NAME = 'yazi';
-const DEFAULT_SETTINGS = { config_dir: '', data_dir: '' };
+const DEFAULT_SETTINGS = { data_dir: '' };
 
 const loading = ref(true);
 const saving = ref(false);
@@ -236,21 +221,19 @@ const error = ref('');
 const snackbar = ref(false);
 const snackbarText = ref('');
 const snackbarColor = ref('success');
-const installBusy = ref(false);
+const installingGroup = ref('');
 
 const settings = reactive({ ...DEFAULT_SETTINGS });
-const form = reactive({ config_dir: '', data_dir: '' });
+const form = reactive({ data_dir: '' });
 const status = reactive({
   installed: false,
   version: '',
+  app_root: '',
+  storage_mode: 'ram',
   config: '',
   config_root: '',
   data: '',
   data_root: '',
-  data_mode: 'memory',
-  config_mode: 'memory',
-  storage_mode: 'memory',
-  pool_root: '',
   config_exists: false,
   command: 'yazi',
   deps: {},
@@ -262,30 +245,43 @@ const status = reactive({
 
 const depGroups = [
   {
-    title: 'Core',
+    key: 'core',
+    title: 'Required',
+    note: 'MIME detection. Without this, Yazi cannot preview files.',
     deps: [
       { key: 'file', label: 'file' },
+    ],
+  },
+  {
+    key: 'search',
+    title: 'Search & navigation',
+    note: 'Small packages for content search, file search, and jumps.',
+    deps: [
       { key: 'rg', label: 'ripgrep' },
       { key: 'fd', label: 'fd' },
       { key: 'fzf', label: 'fzf' },
       { key: 'zoxide', label: 'zoxide' },
       { key: 'jq', label: 'jq' },
-      { key: 'git', label: 'git' },
     ],
   },
   {
-    title: 'Preview',
+    key: 'media',
+    title: 'Media previews',
+    note: 'Large download. Only needed for video, PDF, archives, and AVIF/HEIC/JXL.',
     deps: [
       { key: 'ffmpeg', label: 'ffmpeg' },
       { key: 'pdftoppm', label: 'poppler' },
       { key: '7z', label: '7-Zip' },
       { key: 'magick', label: 'ImageMagick' },
-      { key: 'resvg', label: 'resvg' },
     ],
   },
   {
+    key: 'extras',
     title: 'Extras',
+    note: 'Git status, disk mount, SVG, and zip support.',
     deps: [
+      { key: 'resvg', label: 'resvg' },
+      { key: 'git', label: 'git' },
       { key: 'udisksctl', label: 'udisks2' },
       { key: 'zip', label: 'zip' },
       { key: 'unzip', label: 'unzip' },
@@ -304,6 +300,10 @@ const pluginCommands = [
 ].join('\n');
 
 const missingDeps = computed(() => status.missing_deps || []);
+
+function groupMissing(group) {
+  return group.deps.filter((dep) => !status.deps[dep.key]).length;
+}
 
 let pollTimer = null;
 
@@ -346,11 +346,8 @@ async function fetchSettings() {
   if (!res.ok) throw new Error(`Settings request failed: HTTP ${res.status}`);
   const raw = await res.json();
   const data = raw && raw.data && typeof raw.data === 'object' ? raw.data : raw;
-  for (const key of Object.keys(DEFAULT_SETTINGS)) {
-    if (data[key] !== undefined && data[key] !== null) settings[key] = data[key];
-  }
-  form.config_dir = settings.config_dir || '';
-  form.data_dir = settings.data_dir || '';
+  settings.data_dir = data.data_dir || '';
+  form.data_dir = settings.data_dir;
 }
 
 async function refreshStatus() {
@@ -358,14 +355,12 @@ async function refreshStatus() {
   const out = parseOutput(data) || {};
   status.installed = out.installed === true;
   status.version = out.version || '';
+  status.app_root = out.app_root || '';
+  status.storage_mode = out.storage_mode || 'ram';
   status.config = out.config || '';
   status.config_root = out.config_root || '';
   status.data = out.data || '';
   status.data_root = out.data_root || '';
-  status.data_mode = out.data_mode || 'memory';
-  status.config_mode = out.config_mode || 'memory';
-  status.storage_mode = out.storage_mode || 'memory';
-  status.pool_root = out.pool_root || '';
   status.config_exists = out.config_exists === true;
   status.command = out.command || 'yazi';
   status.deps = out.deps || {};
@@ -387,48 +382,33 @@ async function refreshAll() {
   }
 }
 
-function usePoolDefaults() {
-  form.config_dir = '';
+function useRam() {
   form.data_dir = '';
-  notify('Pool defaults selected; click Save settings');
+  notify('RAM selected; click Save settings');
 }
 
-function useRamData() {
-  form.data_dir = '/run/yazi/data';
-  notify('RAM data selected; click Save settings');
-}
-
-function validatePath(label, value) {
+function validatePath(value) {
   if (!value) return;
   if (!value.startsWith('/')) {
-    throw new Error(`${label} must be an absolute path`);
+    throw new Error('App directory must be an absolute path');
   }
   if (value === '/boot' || value.startsWith('/boot/')) {
-    throw new Error(`${label} must be on a pool such as /mnt/cache/appdata/yazi, not /boot`);
-  }
-  if (!value.startsWith('/mnt/') && value !== '/run' && !value.startsWith('/run/') && value !== '/tmp' && !value.startsWith('/tmp/')) {
-    throw new Error(`${label} must be under /mnt, /run, or /tmp`);
+    throw new Error('App directory must not be on /boot');
   }
 }
 
 async function saveSettings() {
   saving.value = true;
   try {
-    const configDir = form.config_dir.trim();
     const dataDir = form.data_dir.trim();
-    validatePath('Config directory', configDir);
-    validatePath('Data directory', dataDir);
-    if (configDir && dataDir && configDir === dataDir) {
-      throw new Error('Config and data directories must be different');
-    }
+    validatePath(dataDir);
 
     const res = await fetch(`/api/v1/mos/plugins/settings/${PLUGIN_NAME}`, {
       method: 'POST',
       headers: jsonHeaders(),
-      body: JSON.stringify({ config_dir: configDir, data_dir: dataDir }),
+      body: JSON.stringify({ data_dir: dataDir }),
     });
     if (!res.ok) throw new Error(`Save failed: HTTP ${res.status}`);
-    settings.config_dir = configDir;
     settings.data_dir = dataDir;
     await refreshStatus();
     notify('Settings saved');
@@ -453,40 +433,40 @@ function startPolling() {
       await refreshStatus();
       if (!status.deps_installing) {
         stopPolling();
-        installBusy.value = false;
+        installingGroup.value = '';
         if (status.deps_failed) {
           notify('Dependency installation failed. Check the log path on the card.', 'error');
         } else {
-          notify('Basic dependencies are ready.');
+          notify('Dependencies updated.');
         }
       }
     } catch (e) {
       stopPolling();
-      installBusy.value = false;
+      installingGroup.value = '';
       setError(e);
     }
   }, 3000);
 }
 
-async function installDeps() {
+async function installGroup(key) {
   error.value = '';
-  installBusy.value = true;
+  installingGroup.value = key;
   try {
-    await query(['install_deps'], false, 30);
+    await query(['install_group', key], false, 30);
     await refreshStatus();
     if (status.deps_installing) {
-      notify('Dependency installation started');
+      notify(`Installing ${key} dependencies`);
       startPolling();
     } else {
-      installBusy.value = false;
+      installingGroup.value = '';
       if (status.deps_failed) {
         notify('Dependency installation failed. Check the log path on the card.', 'error');
       } else {
-        notify('Basic dependencies are ready.');
+        notify('Dependencies updated.');
       }
     }
   } catch (e) {
-    installBusy.value = false;
+    installingGroup.value = '';
     setError(e);
   }
 }
@@ -503,7 +483,6 @@ async function copyPluginCommands() {
 onMounted(async () => {
   await refreshAll();
   if (status.deps_installing) {
-    installBusy.value = true;
     startPolling();
   }
 });

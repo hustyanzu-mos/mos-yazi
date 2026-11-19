@@ -1,6 +1,6 @@
 #!/bin/sh
 # Yazi wrapper for MOS.
-# Config and data live on a mounted pool; state and cache live in RAM.
+# Config, data, state, and cache stay in RAM unless an app directory is configured.
 
 . "${YAZI_ENV:-/usr/share/yazi-plugin/yazi-env}"
 

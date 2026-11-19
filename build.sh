@@ -9,7 +9,7 @@ cd "$ROOT"
 
 VERSION="${1:-${VERSION:-}}"
 if [ -z "$VERSION" ]; then
-  VERSION="$(node -e "import('./page/plugin.config.js').then(m => console.log(m.default.version))" 2>/dev/null || echo 0.1.1)"
+  VERSION="$(node -e "import('./page/plugin.config.js').then(m => console.log(m.default.version))" 2>/dev/null || echo 0.2.0)"
 fi
 
 case "$(uname -m)" in
@@ -110,7 +110,7 @@ Maintainer: hustyanzu
 Section: utils
 Priority: optional
 Description: Yazi plugin for MOS
- Blazing fast terminal file manager with config and data on the MOS pool.
+ Blazing fast terminal file manager with optional user-selected app directory.
 EOF
 
 install -m 0755 "$ROOT/debian/postinst" "$PKG_DIR/DEBIAN/postinst"

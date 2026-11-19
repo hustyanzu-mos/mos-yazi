@@ -47,6 +47,7 @@ _restore() {
 
   if [ -x "$HB" ]; then
     "$HB" prepare >/dev/null 2>&1 || true
+    "$HB" install_deps >/dev/null 2>&1 || true
   fi
 }
 
